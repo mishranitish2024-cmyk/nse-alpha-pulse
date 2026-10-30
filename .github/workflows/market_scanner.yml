@@ -24,6 +24,9 @@ permissions:
 jobs:
   run-nse-scanner:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./nse-intraday-trading-bot
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -33,6 +36,7 @@ jobs:
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: 'nse-intraday-trading-bot/requirements.txt'
 
       - name: Install Dependencies
         run: |
@@ -66,3 +70,4 @@ jobs:
             git diff --staged --quiet || git commit -m "chore(db): update paper_trades.db [skip ci]"
             git push
           fi
+

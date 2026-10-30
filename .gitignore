@@ -1,16 +1,4 @@
-# Environments & Secrets
-.env
-*.env
-**/.env
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
 venv/
-.venv/
-env/
-.pytest_cache/
-.coverage
-htmlcov/
-
+__pycache__/
+*.pyc
+.env
