@@ -1,4 +1,5 @@
 import sqlite3
+import html
 from datetime import datetime
 import pytz
 import pandas as pd
@@ -138,8 +139,9 @@ def evaluate_open_paper_trades() -> str:
                 (round(exit_price, 2), exit_reason, pnl, trade["id"]),
             )
             pnl_str = f"+₹{pnl:,.2f}" if pnl >= 0 else f"-₹{abs(pnl):,.2f}"
+            stk_clean = html.escape(str(trade['stock']), quote=False)
             summary_lines.append(
-                f"• <b>{trade['stock']} ({direction})</b> | {exit_reason}\n"
+                f"• <b>{stk_clean} ({direction})</b> | {exit_reason}\n"
                 f"  Entry: ₹{entry} → Exit: ₹{exit_price:.2f} | Qty: {qty} | <b>PnL: {pnl_str}</b>"
             )
 

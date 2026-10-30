@@ -1,5 +1,7 @@
 import os
 import time
+import html
+import re
 import requests
 import pytz
 from datetime import datetime
@@ -21,22 +23,55 @@ TRADING_CAPITAL = float(os.getenv("TRADING_CAPITAL", "50000"))
 IST = pytz.timezone("Asia/Kolkata")
 
 
+def clean_html(val: object) -> str:
+    """Escapes &, <, > characters for safe HTML telegram messages."""
+    return html.escape(str(val), quote=False)
+
+
 def send_telegram_message(text: str) -> None:
     if not BOT_TOKEN or not CHAT_ID:
         print(text)
         return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    for i in range(0, len(text), 3900):
+
+    chunks = []
+    current_chunk = ""
+    for line in text.split("\n"):
+        if len(current_chunk) + len(line) + 1 > 3800:
+            chunks.append(current_chunk.strip())
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+
+    for chunk in chunks:
         payload = {
             "chat_id": CHAT_ID,
-            "text": text[i : i + 3900],
+            "text": chunk,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
         try:
-            requests.post(url, json=payload, timeout=10).raise_for_status()
+            resp = requests.post(url, json=payload, timeout=10)
+            resp.raise_for_status()
         except Exception as e:
-            print(f"[!] Telegram send error: {e}")
+            print(f"[!] Telegram HTML send error: {e}")
+            if hasattr(e, "response") and e.response is not None:
+                print(f"[!] Response details: {e.response.text}")
+            # Fallback: Strip HTML tags and send as plain text
+            try:
+                plain_text = re.sub(r"<[^>]+>", "", chunk)
+                plain_text = html.unescape(plain_text)
+                fallback_payload = {
+                    "chat_id": CHAT_ID,
+                    "text": plain_text,
+                    "disable_web_page_preview": True,
+                }
+                requests.post(url, json=fallback_payload, timeout=10).raise_for_status()
+                print("[+] Alert delivered via plain-text fallback.")
+            except Exception as fb_err:
+                print(f"[!] Telegram fallback error: {fb_err}")
 
 
 def job_evening_watchlist() -> None:
@@ -48,11 +83,14 @@ def job_evening_watchlist() -> None:
 
     lines = [f"<b>🌙 NIGHT-BEFORE WATCHLIST ({now_str})</b>\n"]
     for _, row in df.head(10).iterrows():
+        stock_name = clean_html(row["Stock"])
+        trend_name = clean_html(row["Trend"])
+        setup_name = clean_html(row["Setups Triggered"])
         lines.append(
-            f"📌 <b>{row['Stock']}</b> | Close: ₹{row['Close (₹)']}\n"
-            f"   • <b>Buy > PDH:</b> ₹{row['PDH (Buy >)']} | <b>Short < PDL:</b> ₹{row['PDL (Short <)']}\n"
-            f"   • <b>RVOL:</b> {row['RVOL']} | <b>RSI(14):</b> {row['RSI(14)']} | {row['Trend']}\n"
-            f"   • <b>Setup:</b> <code>{row['Setups Triggered']}</code>\n"
+            f"📌 <b>{stock_name}</b> | Close: ₹{row['Close (₹)']}\n"
+            f"   • <b>Buy Above PDH:</b> ₹{row['PDH (Buy >)']} | <b>Short Below PDL:</b> ₹{row['PDL (Short <)']}\n"
+            f"   • <b>RVOL:</b> {row['RVOL']} | <b>RSI(14):</b> {row['RSI(14)']} | {trend_name}\n"
+            f"   • <b>Setup:</b> <code>{setup_name}</code>\n"
         )
     send_telegram_message("\n".join(lines))
 
@@ -68,6 +106,9 @@ def job_morning_orb_scan() -> None:
 
     lines = [f"<b>⚡ 5-MIN CANDLESTICK & CONFLUENCE ALERTS ({now_str})</b>\n"]
     for _, row in df.iterrows():
+        stock_name = clean_html(row["Stock"])
+        candle_name = clean_html(row["Candle"])
+        signal_name = clean_html(row["Signal"])
         trade_block = ""
         if row["Qty (1% Risk)"] > 0:
             trade_block = (
@@ -75,9 +116,9 @@ def job_morning_orb_scan() -> None:
                 f"   🛡️ <b>1% Risk Qty:</b> <code>{row['Qty (1% Risk)']} Shares</code>\n"
             )
         lines.append(
-            f"🔥 <b>{row['Stock']}</b> | LTP: ₹{row['LTP (₹)']} | Vol: {row['5m Vol']} | RSI: {row['RSI(14)']}\n"
+            f"🔥 <b>{stock_name}</b> | LTP: ₹{row['LTP (₹)']} | Vol: {row['5m Vol']} | RSI: {row['RSI(14)']}\n"
             f"   • <b>VWAP:</b> ₹{row['VWAP']} | <b>20 EMA:</b> ₹{row['20 EMA']}\n"
-            f"   • <b>Candle:</b> {row['Candle']} | <b>Signal:</b> <code>{row['Signal']}</code>\n"
+            f"   • <b>Candle:</b> {candle_name} | <b>Signal:</b> <code>{signal_name}</code>\n"
             f"{trade_block}"
         )
     if logged > 0:
