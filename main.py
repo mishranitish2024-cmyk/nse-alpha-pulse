@@ -77,15 +77,15 @@ def health_check():
     }
 
 
-@app.api_route("/scan/{mode}", methods=["GET", "POST"])
+@app.get("/scan/{mode}")
+@app.post("/scan/{mode}")
 def trigger_scan(
     mode: str,
     background_tasks: BackgroundTasks,
     secret: Optional[str] = Query(None, description="Optional cron secret authentication"),
     x_cron_secret: Optional[str] = Header(None, alias="X-Cron-Secret"),
 ):
-    """Triggers market scanner jobs asynchronously.
-    Supports both GET and POST so cron-job.org can hit it effortlessly.
+    """Triggers market scanner jobs asynchronously via GET or POST.
     Modes:
       - 'premarket': 09:00 AM 4-Check Market Bias (US, VIX, Breadth, GIFT Nifty)
       - 'orb': 09:30 AM 15-min Opening Range Breakout & Candlestick Scan
@@ -105,15 +105,16 @@ def trigger_scan(
             detail=f"Unsupported mode '{mode}'. Choose from: 'premarket', 'orb', 'pnl', or 'eod'.",
         )
 
-    # Queue scanner to run in background so cron-job.org receives an immediate 200 OK without timing out
+    # Queue scanner in the background so cron-job.org / browsers get an immediate 200 OK without timing out
     background_tasks.add_task(run_scanner_job, clean_mode)
 
     now_ist = datetime.now(IST).strftime("%Y-%m-%d %I:%M:%S %p IST")
     return JSONResponse(
-        status_code=status.HTTP_202_ACCEPTED,
+        status_code=status.HTTP_200_OK,
         content={
-            "status": "accepted",
-            "message": f"Scan job '{clean_mode}' queued for immediate execution.",
+            "status": "success",
+            "mode": clean_mode,
+            "message": f"Scan job '{clean_mode}' accepted and queued for execution.",
             "timestamp": now_ist,
         },
     )

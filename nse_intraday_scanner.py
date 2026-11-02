@@ -104,8 +104,12 @@ def detect_5m_candlestick_pattern(curr: pd.Series, prev: pd.Series) -> str | Non
 
 
 def run_eod_watchlist_scan(tickers: list[str]) -> pd.DataFrame:
-    """Stage A: Night-Before Scanner for NR7, Inside Bars, RVOL > 1.5x, and PDH/PDL."""
+    """Stage A: Night-Before Scanner for NR7, Inside Bars, RVOL > 1.5x, and PDH/PDL.
+    Uses 5m intraday bar aggregation to ensure today's High/Low/Close are accurate and avoids
+    the 4:00 PM yfinance incomplete candle anomaly where Close == High.
+    """
     data = yf.download(tickers, period="1y", interval="1d", group_by="ticker", progress=False, threads=True)
+    intra_data = yf.download(tickers, period="5d", interval="5m", group_by="ticker", progress=False, threads=True)
     results = []
 
     for ticker in tickers:
@@ -113,6 +117,25 @@ def run_eod_watchlist_scan(tickers: list[str]) -> pd.DataFrame:
             df = data[ticker].dropna()
             if len(df) < 205:
                 continue
+
+            # Overwrite today's daily candle with true aggregated 5-minute bars
+            try:
+                df_5m = intra_data[ticker].dropna()
+                if not df_5m.empty:
+                    if isinstance(df_5m.columns, pd.MultiIndex):
+                        df_5m.columns = df_5m.columns.get_level_values(0)
+                    latest_date = df_5m.index[-1].date()
+                    today_bars = df_5m[df_5m.index.date == latest_date]
+                    if len(today_bars) >= 5:
+                        df.loc[df.index[-1], "Open"] = round(float(today_bars["Open"].iloc[0]), 2)
+                        df.loc[df.index[-1], "High"] = round(float(today_bars["High"].max()), 2)
+                        df.loc[df.index[-1], "Low"] = round(float(today_bars["Low"].min()), 2)
+                        df.loc[df.index[-1], "Close"] = round(float(today_bars["Close"].iloc[-1]), 2)
+                        intraday_vol = int(today_bars["Volume"].sum())
+                        if intraday_vol > 0:
+                            df.loc[df.index[-1], "Volume"] = intraday_vol
+            except Exception:
+                pass
 
             df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
             df["EMA200"] = df["Close"].ewm(span=200, adjust=False).mean()
@@ -126,7 +149,14 @@ def run_eod_watchlist_scan(tickers: list[str]) -> pd.DataFrame:
             is_nr7 = latest["Range"] == df["Range"].iloc[-7:].min()
             is_inside = (latest["High"] < prev["High"]) and (latest["Low"] > prev["Low"])
             vol_spike = latest["RVOL"] >= 1.5
-            close_pos = (latest["Close"] - latest["Low"]) / latest["Range"] if latest["Range"] > 0 else 0.5
+
+            # Sanity Guard for Close Location Value (CLV)
+            # Require minimum 0.8% intraday range so corrupted zero-wick candles don't trigger false StrongClose
+            day_range = latest["High"] - latest["Low"]
+            has_valid_range = (latest["Low"] > 0) and ((day_range / latest["Low"]) >= 0.008)
+            clv = (latest["Close"] - latest["Low"]) / day_range if day_range > 0 else 0.5
+            is_strong_close = (clv >= 0.80) and has_valid_range
+            is_weak_close = (clv <= 0.20) and has_valid_range
 
             if latest["Close"] > latest["EMA200"] and latest["Close"] > latest["EMA20"]:
                 trend = "BULLISH (>20/200 EMA)"
@@ -142,17 +172,23 @@ def run_eod_watchlist_scan(tickers: list[str]) -> pd.DataFrame:
                 setups.append("InsideBar")
             if vol_spike:
                 setups.append(f"RVOL({latest['RVOL']:.1f}x)")
-            if close_pos >= 0.85:
+            if is_strong_close:
                 setups.append("StrongClose(High)")
-            elif close_pos <= 0.15:
+            elif is_weak_close:
                 setups.append("WeakClose(Low)")
+
+            # Add +0.10% buffer above true PDH and -0.10% buffer below true PDL for breakout triggers
+            buy_above_pdh = round(latest["High"] * 1.001, 2)
+            short_below_pdl = round(latest["Low"] * 0.999, 2)
 
             if setups:
                 results.append({
                     "Stock": ticker.replace(".NS", ""),
                     "Close (₹)": round(latest["Close"], 2),
-                    "PDH (Buy >)": round(latest["High"], 2),
-                    "PDL (Short <)": round(latest["Low"], 2),
+                    "PDH (Buy >)": buy_above_pdh,
+                    "PDL (Short <)": short_below_pdl,
+                    "Raw High": round(latest["High"], 2),
+                    "Raw Low": round(latest["Low"], 2),
                     "RVOL": f"{latest['RVOL']:.2f}x",
                     "RSI(14)": round(latest["RSI"], 1),
                     "Trend": trend,

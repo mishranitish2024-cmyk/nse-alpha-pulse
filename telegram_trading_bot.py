@@ -93,7 +93,7 @@ def job_evening_watchlist() -> None:
         setup_name = clean_html(row["Setups Triggered"])
         lines.append(
             f"📌 <b>{stock_name}</b> | Close: ₹{row['Close (₹)']}\n"
-            f"   • <b>Buy Above PDH:</b> ₹{row['PDH (Buy >)']} | <b>Short Below PDL:</b> ₹{row['PDL (Short <)']}\n"
+            f"   • <b>Buy Above PDH (+0.1%):</b> ₹{row['PDH (Buy >)']} | <b>Short Below PDL (-0.1%):</b> ₹{row['PDL (Short <)']}\n"
             f"   • <b>RVOL:</b> {row['RVOL']} | <b>RSI(14):</b> {row['RSI(14)']} | {trend_name}\n"
             f"   • <b>Setup:</b> <code>{setup_name}</code>\n"
         )
