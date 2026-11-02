@@ -9,14 +9,56 @@ if hasattr(sys.stdout, "reconfigure"):
 
 warnings.filterwarnings("ignore")
 
-NSE_FO_WATCHLIST = [
+# =====================================================================
+# 50 LARGE-CAP BEST COMPANIES (Nifty 50 Blue Chips)
+# =====================================================================
+LARGE_CAP_50 = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
-    "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "LT.NS", "AXISBANK.NS",
-    "KOTAKBANK.NS", "NTPC.NS", "M&M.NS", "MARUTI.NS", "SUNPHARMA.NS",
-    "TATASTEEL.NS", "HINDALCO.NS", "JSWSTEEL.NS", "BAJFINANCE.NS", "ADANIENT.NS",
-    "HAL.NS", "BEL.NS", "TRENT.NS", "DLF.NS", "INDIGO.NS",
-    "COALINDIA.NS", "PFC.NS", "RECLTD.NS", "TITAN.NS", "ULTRACEMCO.NS"
+    "BHARTIARTL.NS", "SBIN.NS", "ITC.NS", "LT.NS", "HCLTECH.NS",
+    "BAJFINANCE.NS", "SUNPHARMA.NS", "M&M.NS", "MARUTI.NS", "KOTAKBANK.NS",
+    "AXISBANK.NS", "TITAN.NS", "ONGC.NS", "NTPC.NS", "POWERGRID.NS",
+    "ADANIENT.NS", "ADANIPORTS.NS", "COALINDIA.NS", "BAJAJFINSV.NS", "TATASTEEL.NS",
+    "ASIANPAINT.NS", "HINDUNILVR.NS", "ULTRACEMCO.NS", "JSWSTEEL.NS", "GRASIM.NS",
+    "HINDALCO.NS", "TECHM.NS", "WIPRO.NS", "CIPLA.NS", "DRREDDY.NS",
+    "APOLLOHOSP.NS", "EICHERMOT.NS", "TRENT.NS", "BEL.NS", "HAL.NS",
+    "BPCL.NS", "HEROMOTOCO.NS", "SHREECEM.NS", "DIVISLAB.NS", "SBILIFE.NS",
+    "HDFCLIFE.NS", "BRITANNIA.NS", "NESTLEIND.NS", "INDUSINDBK.NS", "BAJAJ-AUTO.NS"
 ]
+
+# =====================================================================
+# 50 MID-CAP BEST COMPANIES (High Liquidity F&O Leaders)
+# =====================================================================
+MID_CAP_50 = [
+    "DLF.NS", "INDIGO.NS", "PFC.NS", "RECLTD.NS", "POLYCAB.NS",
+    "PERSISTENT.NS", "COFORGE.NS", "LTTS.NS", "CUMMINSIND.NS", "BHARATFORG.NS",
+    "ASHOKLEY.NS", "AUROPHARMA.NS", "LUPIN.NS", "ALKEM.NS", "TORNTPHARM.NS",
+    "PIIND.NS", "COLPAL.NS", "MARICO.NS", "BERGEPAINT.NS", "DABUR.NS",
+    "GODREJCP.NS", "VOLTAS.NS", "HAVELLS.NS", "CROMPTON.NS", "DIXON.NS",
+    "BHEL.NS", "SAIL.NS", "NMDC.NS", "JINDALSTEL.NS", "FEDERALBNK.NS",
+    "IDFCFIRSTB.NS", "BANDHANBNK.NS", "AUBANK.NS", "BANKBARODA.NS", "PNB.NS",
+    "CANBK.NS", "UNIONBANK.NS", "CHOLAFIN.NS", "SHRIRAMFIN.NS", "MUTHOOTFIN.NS",
+    "M&MFIN.NS", "ABCAPITAL.NS", "TATACOMM.NS", "JUBLFOOD.NS", "CONCOR.NS",
+    "TATAPOWER.NS", "OBEROIRLTY.NS", "GODREJPROP.NS", "PRESTIGE.NS", "ESCORTS.NS"
+]
+
+# =====================================================================
+# 50 SMALL-CAP BEST COMPANIES (High Growth & Active Momentum Leaders)
+# =====================================================================
+SMALL_CAP_50 = [
+    "CDSL.NS", "ANGELONE.NS", "BSE.NS", "MCX.NS", "IEX.NS",
+    "SUZLON.NS", "IRFC.NS", "RVNL.NS", "IRCTC.NS", "MAZDOCK.NS",
+    "COCHINSHIP.NS", "GRSE.NS", "DEVYANI.NS", "KPITTECH.NS", "TATAELXSI.NS",
+    "CYIENT.NS", "SONACOMS.NS", "KAYNES.NS", "TITAGARH.NS", "JUPITERWAG.NS",
+    "RITES.NS", "RAILTEL.NS", "NBCC.NS", "HUDCO.NS", "MOTILALOFS.NS",
+    "MANAPPURAM.NS", "POONAWALLA.NS", "KARURVYSYA.NS", "CUB.NS", "EQUITASBNK.NS",
+    "UJJIVANSFB.NS", "RBLBANK.NS", "JYOTHYLAB.NS", "BIKAJI.NS", "CEATLTD.NS",
+    "APOLLOTYRE.NS", "MRF.NS", "EXIDEIND.NS", "KEC.NS", "DEEPAKNTR.NS",
+    "TATACHEM.NS", "AARTIIND.NS", "ATUL.NS", "CASTROLIND.NS", "CESC.NS",
+    "TATAINVEST.NS", "BLS.NS", "REDINGTON.NS", "HBLPOWER.NS", "RADICO.NS"
+]
+
+# Unified 150-Stock High Alpha Watchlist
+NSE_FO_WATCHLIST = LARGE_CAP_50 + MID_CAP_50 + SMALL_CAP_50
 
 
 def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:

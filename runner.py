@@ -44,22 +44,100 @@ def send_telegram_alert(message: str) -> None:
 # 1. PRE-MARKET ANALYSIS ENGINE (RUNS AT 09:00 AM IST)
 # ==============================================================================
 
-def run_pre_market_analysis() -> dict:
-    """
-    Executes 4 Pre-Market Checks at 09:00 AM IST:
-    1. US Markets (Investing.com proxy via yfinance: NASDAQ & DJI)
-    2. India VIX (Volatile > 15 vs Stable < 15)
-    3. Market Breadth (NSE Advances vs Declines)
-    4. GIFT Nifty Opening Expectation
-    """
-    global MARKET_BIAS
-    now_str = datetime.now(IST).strftime("%d-%b-%Y | %H:%M IST")
-    print("\n==================================================")
-    print(f"🌅 RUNNING PRE-MARKET ANALYSIS ({now_str})")
-    print("==================================================")
+def get_india_vix() -> dict:
+    """Fetches real-time India VIX via yfinance with MultiIndex safety."""
+    try:
+        vix_df = yf.download("^INDIAVIX", period="5d", interval="1d", progress=False)
+        if not vix_df.empty:
+            if isinstance(vix_df.columns, pd.MultiIndex):
+                try:
+                    close_col = vix_df["Close"]["^INDIAVIX"].dropna()
+                except KeyError:
+                    close_col = vix_df[("^INDIAVIX", "Close")].dropna()
+            else:
+                close_col = vix_df["Close"].dropna()
 
-    # Check 1: US Markets (NASDAQ & Dow Jones)
+            if not close_col.empty:
+                latest_vix = float(close_col.iloc[-1])
+                prev_vix = float(close_col.iloc[-2]) if len(close_col) > 1 else latest_vix
+                pct_change = ((latest_vix - prev_vix) / prev_vix) * 100 if prev_vix > 0 else 0.0
+                regime = "VOLATILE (>15)" if latest_vix > 15.0 else "STABLE (<15)"
+                return {
+                    "value": round(latest_vix, 2),
+                    "change_pct": round(pct_change, 2),
+                    "regime": regime,
+                    "is_volatile": latest_vix > 15.0,
+                }
+    except Exception as e:
+        print(f"[!] Error fetching India VIX: {e}")
+    return {"value": 15.0, "change_pct": 0.0, "regime": "STABLE (<15)", "is_volatile": False}
+
+
+def get_gift_nifty_live() -> dict:
+    """
+    Scrapes live GIFT Nifty level from Moneycontrol with BeautifulSoup.
+    Includes yfinance Nifty 50 proxy as fallback.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    # Primary Source: Moneycontrol GIFT Nifty Widget
+    try:
+        url = "https://www.moneycontrol.com/indian-indices/gift-nifty-44.html"
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, "html.parser")
+            price_div = soup.find("div", {"id": "in_val"}) or soup.find("span", {"class": "lastprice"})
+            change_span = soup.find("div", {"id": "in_chg"}) or soup.find("span", {"class": "change"})
+
+            if price_div and price_div.text.strip():
+                price = float(price_div.text.strip().replace(",", ""))
+                change_pct = 0.0
+                if change_span and change_span.text.strip():
+                    raw_chg = change_span.text.strip().replace("%", "").replace("+", "")
+                    if "(" in raw_chg:
+                        raw_chg = raw_chg.split("(")[-1].replace(")", "")
+                    try:
+                        change_pct = float(raw_chg)
+                    except ValueError:
+                        change_pct = 0.0
+
+                sentiment = "GREEN / GAP-UP" if change_pct >= 0 else "RED / GAP-DOWN"
+                return {
+                    "price": price,
+                    "change_pct": change_pct,
+                    "sentiment": sentiment,
+                    "is_green": change_pct >= 0,
+                }
+    except Exception as e:
+        print(f"[!] Moneycontrol GIFT Nifty scrape failed: {e}. Trying fallback...")
+
+    # Fallback Proxy using yfinance Nifty 50 Index (^NSEI)
+    try:
+        nifty_fut = yf.download("^NSEI", period="5d", interval="1d", progress=False)
+        if not nifty_fut.empty:
+            close_col = nifty_fut["Close"].dropna()
+            latest = float(close_col.iloc[-1])
+            prev = float(close_col.iloc[-2]) if len(close_col) > 1 else latest
+            chg = ((latest - prev) / prev) * 100 if prev > 0 else 0.0
+            sentiment = "GREEN / GAP-UP" if chg >= 0 else "RED / GAP-DOWN"
+            return {
+                "price": round(latest, 2),
+                "change_pct": round(chg, 2),
+                "sentiment": sentiment,
+                "is_green": chg >= 0,
+            }
+    except Exception as fb_err:
+        print(f"[!] Fallback proxy error: {fb_err}")
+
+    return {"price": 0.0, "change_pct": 0.0, "sentiment": "NEUTRAL", "is_green": True}
+
+
+def get_us_markets() -> dict:
+    """Fetches NASDAQ & Dow Jones performance via yfinance."""
     nasdaq_change, dji_change = 0.0, 0.0
+    sentiment = "NEUTRAL"
+    status_label = "⚠️ Data Unavailable"
     try:
         us_data = yf.download(["^IXIC", "^DJI"], period="5d", interval="1d", progress=False, group_by="ticker")
         if "^IXIC" in us_data and "^DJI" in us_data:
@@ -74,37 +152,27 @@ def run_pre_market_analysis() -> dict:
             dji_change = ((dji_close.iloc[-1] - dji_close.iloc[-2]) / dji_close.iloc[-2]) * 100
 
         if nasdaq_change > 0 and dji_change > 0:
-            us_status = "🟩 GREEN (Bullish)"
-            MARKET_BIAS["us_sentiment"] = "BULLISH"
+            status_label = "🟩 GREEN (Bullish)"
+            sentiment = "BULLISH"
         elif nasdaq_change < 0 and dji_change < 0:
-            us_status = "🟥 RED (Bearish)"
-            MARKET_BIAS["us_sentiment"] = "BEARISH"
+            status_label = "🟥 RED (Bearish)"
+            sentiment = "BEARISH"
         else:
-            us_status = "🟨 MIXED (Sideways)"
-            MARKET_BIAS["us_sentiment"] = "MIXED"
+            status_label = "🟨 MIXED (Sideways)"
+            sentiment = "MIXED"
     except Exception as e:
         print(f"[!] US Markets fetch warning: {e}")
-        us_status = "⚠️ DATA UNAVAILABLE"
-        MARKET_BIAS["us_sentiment"] = "NEUTRAL"
 
-    # Check 2: India VIX Check
-    try:
-        vix_df = yf.download("^INDIAVIX", period="5d", interval="1d", progress=False)
-        vix_close = vix_df["Close"].dropna()
-        latest_vix = float(vix_close.iloc[-1]) if not vix_close.empty else 15.0
-        if latest_vix > 15.0:
-            vix_status = f"🔥 {latest_vix:.2f} (Volatile > 15)"
-            MARKET_BIAS["vix_regime"] = "VOLATILE"
-        else:
-            vix_status = f"🛡️ {latest_vix:.2f} (Stable < 15)"
-            MARKET_BIAS["vix_regime"] = "STABLE"
-    except Exception as e:
-        print(f"[!] India VIX fetch warning: {e}")
-        latest_vix = 15.0
-        vix_status = "⚠️ 15.0 (Default)"
-        MARKET_BIAS["vix_regime"] = "STABLE"
+    return {
+        "nasdaq_change": round(nasdaq_change, 2),
+        "dji_change": round(dji_change, 2),
+        "status": status_label,
+        "sentiment": sentiment,
+    }
 
-    # Check 3: Market Breadth Check (NSE Advances vs Declines)
+
+def get_nse_market_breadth() -> dict:
+    """Checks NSE Pre-Open Advances vs Declines."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -118,58 +186,72 @@ def run_pre_market_analysis() -> dict:
             advances = data.get("advances", 0)
             declines = data.get("declines", 0)
             breadth_status = f"📈 Advances ({advances}) > Declines ({declines})" if advances >= declines else f"📉 Advances ({advances}) < Declines ({declines})"
-        else:
-            breadth_status = "📊 Pending Pre-Open Session (09:00-09:08 AM)"
+            return {"status": breadth_status, "advances": advances, "declines": declines}
     except Exception:
-        breadth_status = "📊 Pending Pre-Open Settlement (09:08 AM)"
+        pass
+    return {"status": "📊 Pending Pre-Open Settlement (09:08 AM)", "advances": 0, "declines": 0}
 
-    # Check 4: GIFT Nifty Live Scrape / Sentiment
-    try:
-        res = requests.get("https://www.moneycontrol.com/indian-indices/gift-nifty-44.html", headers=headers, timeout=5)
-        if res.status_code == 200 and "in_chg" in res.text:
-            if "green" in res.text.lower() or "+" in res.text:
-                gift_status = "🟩 Green Open Expected (GIFT Nifty)"
-                MARKET_BIAS["gift_nifty_sentiment"] = "GREEN"
-            else:
-                gift_status = "🟥 Red Open Expected (GIFT Nifty)"
-                MARKET_BIAS["gift_nifty_sentiment"] = "RED"
-        else:
-            gift_status = "🟩 Green Open Expected" if MARKET_BIAS["us_sentiment"] == "BULLISH" else "🟥 Red Open Expected"
-            MARKET_BIAS["gift_nifty_sentiment"] = "GREEN" if MARKET_BIAS["us_sentiment"] == "BULLISH" else "RED"
-    except Exception:
-        gift_status = "➡️ Neutral Open Expected"
-        MARKET_BIAS["gift_nifty_sentiment"] = "NEUTRAL"
+
+def run_pre_market_analysis() -> dict:
+    """
+    Executes 4 Pre-Market Checks at 09:00 AM IST:
+    1. US Markets (Investing.com proxy via yfinance: NASDAQ & DJI)
+    2. India VIX (Volatile > 15 vs Stable < 15 via yfinance)
+    3. GIFT Nifty Live Scrape (Moneycontrol + BeautifulSoup with proxy fallback)
+    4. Market Breadth (NSE Advances vs Declines)
+    """
+    global MARKET_BIAS
+    now_str = datetime.now(IST).strftime("%d-%b-%Y | %H:%M IST")
+    print("\n==================================================")
+    print(f"🌅 RUNNING PRE-MARKET ANALYSIS ({now_str})")
+    print("==================================================")
+
+    us = get_us_markets()
+    vix = get_india_vix()
+    gift = get_gift_nifty_live()
+    breadth = get_nse_market_breadth()
+
+    MARKET_BIAS["us_sentiment"] = us["sentiment"]
+    MARKET_BIAS["vix_regime"] = "VOLATILE" if vix["is_volatile"] else "STABLE"
+    MARKET_BIAS["gift_nifty_sentiment"] = "GREEN" if gift["is_green"] else "RED"
 
     # Determine Directional Filters based on Combined Confluence
-    if MARKET_BIAS["us_sentiment"] == "BULLISH" and MARKET_BIAS["gift_nifty_sentiment"] == "GREEN":
+    if us["sentiment"] == "BULLISH" and gift["is_green"]:
         overall_bias = "🚀 BULLISH (Longs Only)"
         MARKET_BIAS["allow_longs"] = True
         MARKET_BIAS["allow_shorts"] = False  # Blocks counter-trend shorting on strong green days!
-    elif MARKET_BIAS["us_sentiment"] == "BEARISH" and MARKET_BIAS["gift_nifty_sentiment"] == "RED":
+    elif us["sentiment"] == "BEARISH" and not gift["is_green"]:
         overall_bias = "🩸 BEARISH (Shorts Only)"
         MARKET_BIAS["allow_longs"] = False  # Blocks buying on high-risk crash days!
         MARKET_BIAS["allow_shorts"] = True
     else:
-        overall_bias = "⚖️ NEUTRAL / SIDEWAYS (Both Allowed with Tight Filters)"
+        overall_bias = "⚖️ NEUTRAL / SIDEWAYS (Both Allowed with Strict Filters)"
         MARKET_BIAS["allow_longs"] = True
         MARKET_BIAS["allow_shorts"] = True
 
     MARKET_BIAS["bias"] = overall_bias
 
+    vix_icon = "🔥" if vix["is_volatile"] else "🛡️"
+    gift_icon = "🟩" if gift["is_green"] else "🟥"
+
     # Dispatch Telegram Report
     msg = (
         f"🌅 <b>NSE PRE-MARKET ANALYSIS (09:00 AM IST)</b>\n"
         f"<i>Date: {datetime.now(IST).strftime('%d-%b-%Y')}</i>\n\n"
-        f"1️⃣ <b>US Markets:</b> {us_status}\n"
-        f"   • NASDAQ: <code>{nasdaq_change:+.2f}%</code> | DJI: <code>{dji_change:+.2f}%</code>\n\n"
-        f"2️⃣ <b>India VIX:</b> {vix_status}\n\n"
-        f"3️⃣ <b>NSE Market Breadth:</b> {breadth_status}\n\n"
-        f"4️⃣ <b>GIFT Nifty Open:</b> {gift_status}\n\n"
+        f"1️⃣ <b>US Markets:</b> {us['status']}\n"
+        f"   • NASDAQ: <code>{us['nasdaq_change']:+.2f}%</code> | DJI: <code>{us['dji_change']:+.2f}%</code>\n\n"
+        f"2️⃣ <b>India VIX:</b> {vix_icon} <b>{vix['value']}</b> (<code>{vix['change_pct']:+.2f}%</code>) — {vix['regime']}\n\n"
+        f"3️⃣ <b>GIFT Nifty:</b> {gift_icon} <b>{gift['price']}</b> (<code>{gift['change_pct']:+.2f}%</code>) — {gift['sentiment']}\n\n"
+        f"4️⃣ <b>NSE Market Breadth:</b> {breadth['status']}\n\n"
         f"🎯 <b>DAY MARKET BIAS:</b> <b>{overall_bias}</b>\n\n"
         f"🛡️ <i>Filtering: Longs Allowed = {MARKET_BIAS['allow_longs']} | Shorts Allowed = {MARKET_BIAS['allow_shorts']}</i>"
     )
 
     send_telegram_alert(msg)
+    print(f"1️⃣ India VIX: {vix['value']} ({vix['change_pct']:+.2f}%) -> {vix['regime']}")
+    print(f"2️⃣ GIFT Nifty: {gift['price']} ({gift['change_pct']:+.2f}%) -> {gift['sentiment']}")
+    print(f"3️⃣ US Markets: NASDAQ ({us['nasdaq_change']:+.2f}%), DJI ({us['dji_change']:+.2f}%)")
+    print(f"4️⃣ Market Bias: {overall_bias}")
     print("✅ Pre-market analysis completed & dispatch sent.")
     return MARKET_BIAS
 
