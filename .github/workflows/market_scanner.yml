@@ -2,6 +2,7 @@ name: NSE Intraday Scanner & Paper-Trade Bot
 
 on:
   schedule:
+    - cron: '30 3 * * 1-5'   # 9:00 AM IST (Mon-Fri) -> 4 Pre-Market Checks & Market Bias
     - cron: '0 4 * * 1-5'    # 9:30 AM IST (Mon-Fri) -> ORB & Candlestick Scan
     - cron: '45 4 * * 1-5'   # 10:15 AM IST (Mon-Fri) -> VWAP Pullback Scan
     - cron: '45 9 * * 1-5'   # 3:15 PM IST (Mon-Fri) -> Auto Square-Off PnL Report
@@ -9,11 +10,12 @@ on:
   workflow_dispatch:
     inputs:
       scan_mode:
-        description: 'Select scan mode (orb, pnl, or eod)'
+        description: 'Select scan mode (premarket, orb, pnl, or eod)'
         required: true
         default: 'orb'
         type: choice
         options:
+          - premarket
           - orb
           - pnl
           - eod
@@ -43,6 +45,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "MODE=${{ github.event.inputs.scan_mode }}" >> $GITHUB_ENV
+          elif [ "${{ github.event.schedule }}" = "30 3 * * 1-5" ]; then
+            echo "MODE=premarket" >> $GITHUB_ENV
           elif [ "${{ github.event.schedule }}" = "45 9 * * 1-5" ]; then
             echo "MODE=pnl" >> $GITHUB_ENV
           elif [ "${{ github.event.schedule }}" = "40 10 * * 1-5" ]; then
@@ -57,12 +61,13 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python run_single_job.py $MODE
 
-      - name: Commit Updated SQLite Paper-Trade DB
+      - name: Generate Live Performance Charts & Commit to Repo
         run: |
-          if [ -f paper_trades.db ]; then
+          python -c "from chart_generator import generate_equity_curve_chart; generate_equity_curve_chart()"
+          if [ -f paper_trades.db ] || [ -f equity_curve.png ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -f paper_trades.db
-            git diff --staged --quiet || git commit -m "chore(db): update paper_trades.db [skip ci]"
+            git add paper_trades.db equity_curve.png
+            git diff --staged --quiet || git commit -m "chore(dashboard): update live equity curve and paper trades db [skip ci]"
             git push
           fi

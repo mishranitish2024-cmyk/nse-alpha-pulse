@@ -74,6 +74,11 @@ def send_telegram_message(text: str) -> None:
                 print(f"[!] Telegram fallback error: {fb_err}")
 
 
+def job_premarket_scan() -> None:
+    from runner import run_pre_market_analysis
+    run_pre_market_analysis()
+
+
 def job_evening_watchlist() -> None:
     now_str = datetime.now(IST).strftime("%d %b %Y | %I:%M %p IST")
     df = run_eod_watchlist_scan(NSE_FO_WATCHLIST)
@@ -82,7 +87,7 @@ def job_evening_watchlist() -> None:
         return
 
     lines = [f"<b>🌙 NIGHT-BEFORE WATCHLIST ({now_str})</b>\n"]
-    for _, row in df.head(10).iterrows():
+    for _, row in df.head(15).iterrows():
         stock_name = clean_html(row["Stock"])
         trend_name = clean_html(row["Trend"])
         setup_name = clean_html(row["Setups Triggered"])
@@ -98,10 +103,28 @@ def job_evening_watchlist() -> None:
 def job_morning_orb_scan() -> None:
     now_str = datetime.now(IST).strftime("%d %b %Y | %I:%M %p IST")
     df = run_intraday_preopen_and_orb_scan(NSE_FO_WATCHLIST, capital=TRADING_CAPITAL)
+
+    # Filter setups according to 09:00 AM Market Bias Gate
+    if not df.empty:
+        try:
+            from runner import evaluate_setup_with_bias
+            filtered_rows = []
+            for _, row in df.iterrows():
+                direction = "LONG" if "BUY" in str(row["Signal"]) else "SHORT"
+                try:
+                    rvol_val = float(str(row["5m Vol"]).replace("x", ""))
+                except Exception:
+                    rvol_val = 1.0
+                if evaluate_setup_with_bias(row["Stock"], direction, rvol_val):
+                    filtered_rows.append(row)
+            df = pd.DataFrame(filtered_rows) if filtered_rows else pd.DataFrame()
+        except Exception as filter_err:
+            print(f"[!] Pre-market bias filter pass-through: {filter_err}")
+
     logged = log_paper_trades(df)
 
     if df.empty:
-        send_telegram_message(f"<b>⚡ 5-Min Live Confluence Scan ({now_str})</b>\nNo high-conviction setups right now.")
+        send_telegram_message(f"<b>⚡ 5-Min Live Confluence Scan ({now_str})</b>\nNo high-conviction setups right now (or filtered by Market Bias).")
         return
 
     lines = [f"<b>⚡ 5-MIN CANDLESTICK & CONFLUENCE ALERTS ({now_str})</b>\n"]
@@ -135,11 +158,14 @@ def handle_command(cmd_text: str) -> None:
     if cmd in ("/start", "/help"):
         send_telegram_message(
             "<b>📊 NSE Intraday Confluence Bot Ready!</b>\n\n"
-            "• <code>/eod</code> — Night-Before NR7/RVOL Watchlist\n"
+            "• <code>/premarket</code> — 09:00 AM 4-Check Market Bias\n"
             "• <code>/orb</code> — Live 5-Min Candlestick, VWAP & ORB Scan\n"
+            "• <code>/eod</code> — Night-Before NR7/RVOL Watchlist\n"
             "• <code>/pnl</code> — Evaluate Paper Trades & Win Rate\n"
             "• <code>/size [Cap] [Entry] [SL]</code> — 1% Risk Calculator"
         )
+    elif cmd == "/premarket":
+        job_premarket_scan()
     elif cmd == "/eod":
         job_evening_watchlist()
     elif cmd == "/orb":

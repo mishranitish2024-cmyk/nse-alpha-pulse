@@ -1,3 +1,13 @@
+# 📈 Live Algorithmic Trading Performance
+
+<p align="center">
+  <img src="equity_curve.png" width="85%" alt="Live Paper-Trading Equity Growth Curve">
+</p>
+
+> *Updated automatically every trading day at 3:15 PM IST via GitHub Actions & SQLite.*
+
+---
+
 # 📊 NSE Intraday Confluence Scanner & Paper-Trading Bot
 
 Automated Python equity screener and paper-trading engine for NSE F&O stocks using **5-Minute Candlestick Patterns**, **VWAP & 20/200 EMA Confluence**, **15-Minute Opening Range Breakouts (ORB)**, and **1% Risk Position Sizing**.
@@ -11,6 +21,7 @@ python nse_intraday_scanner.py
 ```
 
 ## 🛠️ Features
+- **150 High-Alpha Equities:** Screened across 50 Large-Cap (Nifty 50), 50 Mid-Cap, and 50 Small-Cap momentum leaders.
 - **Stage A (Night-Before EOD Scan):** Identifies NR7, Inside Bar, RVOL > 1.5x, PDH / PDL levels, and EMA trend confluence.
 - **Stage B (Live 5-Min Intraday Scanner):** Real-time candlestick pattern recognition (Engulfing, Hammer, Shooting Star, Marubozu), 15m ORB breakout/breakdown, and VWAP / 20 EMA confluence.
 - **SQLite Paper-Trading Engine:** Automatically records trade setups with 1% risk position sizing and evaluates outcomes at 3:15 PM IST.
@@ -36,6 +47,7 @@ Set up scheduled jobs on [cron-job.org](https://cron-job.org):
 | Job Name | Schedule (IST) | Days | URL |
 | :--- | :--- | :--- | :--- |
 | **Keep-Alive Ping** | Every 10 mins (9:00 AM - 4:30 PM) | Mon-Fri | `https://your-app.onrender.com/health` |
+| **Pre-Market 4 Checks** | 9:00 AM IST | Mon-Fri | `https://your-app.onrender.com/scan/premarket` |
 | **Morning ORB Scan** | 9:30 AM IST | Mon-Fri | `https://your-app.onrender.com/scan/orb` |
 | **VWAP Pullback Scan** | 10:15 AM IST | Mon-Fri | `https://your-app.onrender.com/scan/orb` |
 | **3:15 PM Square-Off** | 3:15 PM IST | Mon-Fri | `https://your-app.onrender.com/scan/pnl` |

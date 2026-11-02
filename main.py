@@ -6,6 +6,7 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, Header, stat
 from fastapi.responses import JSONResponse
 
 from telegram_trading_bot import (
+    job_premarket_scan,
     job_evening_watchlist,
     job_morning_orb_scan,
     send_telegram_message,
@@ -33,11 +34,18 @@ def run_scanner_job(job_name: str) -> None:
     """Executes the appropriate scanner function in the background."""
     print(f"[*] Starting background scanner job: {job_name}")
     try:
-        if job_name == "orb":
+        if job_name == "premarket":
+            job_premarket_scan()
+        elif job_name == "orb":
             job_morning_orb_scan()
         elif job_name == "pnl":
             report = evaluate_open_paper_trades()
             send_telegram_message(report)
+            try:
+                from chart_generator import generate_equity_curve_chart
+                generate_equity_curve_chart()
+            except Exception as chart_err:
+                print(f"[!] Chart generation error: {chart_err}")
         elif job_name == "eod":
             job_evening_watchlist()
         else:
@@ -61,6 +69,7 @@ def health_check():
         "service": "NSE Intraday Scanner & Paper-Trading Bot",
         "current_time_ist": now_ist,
         "available_triggers": {
+            "premarket_bias": "/scan/premarket",
             "orb_scan": "/scan/orb",
             "eod_scan": "/scan/eod",
             "pnl_scorecard": "/scan/pnl",
@@ -78,9 +87,10 @@ def trigger_scan(
     """Triggers market scanner jobs asynchronously.
     Supports both GET and POST so cron-job.org can hit it effortlessly.
     Modes:
-      - 'orb': 9:30 AM 15-min Opening Range Breakout & Candlestick Scan
-      - 'pnl': 3:15 PM Auto Square-Off & Daily/All-Time PnL Scorecard
-      - 'eod': 4:10 PM Night-Before NR7, Inside Bar & RVOL Watchlist
+      - 'premarket': 09:00 AM 4-Check Market Bias (US, VIX, Breadth, GIFT Nifty)
+      - 'orb': 09:30 AM 15-min Opening Range Breakout & Candlestick Scan
+      - 'pnl': 03:15 PM Auto Square-Off & Daily/All-Time PnL Scorecard
+      - 'eod': 04:10 PM Night-Before NR7, Inside Bar & RVOL Watchlist
     """
     if not verify_secret(secret_query=secret, x_cron_secret=x_cron_secret):
         raise HTTPException(
@@ -89,10 +99,10 @@ def trigger_scan(
         )
 
     clean_mode = mode.lower().strip()
-    if clean_mode not in ("orb", "pnl", "eod"):
+    if clean_mode not in ("premarket", "orb", "pnl", "eod"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported mode '{mode}'. Choose from: 'orb', 'pnl', or 'eod'.",
+            detail=f"Unsupported mode '{mode}'. Choose from: 'premarket', 'orb', 'pnl', or 'eod'.",
         )
 
     # Queue scanner to run in background so cron-job.org receives an immediate 200 OK without timing out
