@@ -127,7 +127,8 @@ def job_morning_orb_scan() -> None:
         send_telegram_message(f"<b>⚡ 5-Min Live Confluence Scan ({now_str})</b>\nNo high-conviction setups right now (or filtered by Market Bias).")
         return
 
-    lines = [f"<b>⚡ 5-MIN CANDLESTICK & CONFLUENCE ALERTS ({now_str})</b>\n"]
+    bar_info = f"Bar: {df['Bar'].iloc[0]} IST | " if "Bar" in df.columns and not df.empty else ""
+    lines = [f"<b>⚡ 5-MIN CANDLESTICK & CONFLUENCE ALERTS ({bar_info}{now_str})</b>\n"]
     for _, row in df.iterrows():
         stock_name = clean_html(row["Stock"])
         candle_name = clean_html(row["Candle"])

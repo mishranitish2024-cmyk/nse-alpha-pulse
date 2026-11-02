@@ -11,7 +11,7 @@ def generate_equity_curve_chart(output_path: str = "equity_curve.png") -> str:
     try:
         with sqlite3.connect(DB_FILE) as conn:
             df = pd.read_sql_query(
-                "SELECT trade_date, pnl FROM paper_trades WHERE status = 'CLOSED' ORDER BY trade_date ASC",
+                "SELECT trade_date, COALESCE(net_pnl, pnl) AS pnl FROM paper_trades WHERE status = 'CLOSED' ORDER BY trade_date ASC",
                 conn
             )
         if df.empty:

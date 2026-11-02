@@ -285,8 +285,21 @@ def evaluate_setup_with_bias(ticker: str, direction: str, rvol: float) -> bool:
 # 3. CONTINUOUS ALL-DAY TRADING LOOP
 # ==============================================================================
 
+def sleep_until_next_5m_boundary(buffer_seconds: int = 3) -> None:
+    """Sleeps precisely until the next 5-minute interval plus buffer seconds (e.g. XX:X0:03)."""
+    now = datetime.now(IST)
+    minute = now.minute
+    second = now.second
+    next_minute = ((minute // 5) + 1) * 5
+    if next_minute == 60:
+        sleep_secs = (60 - minute - 1) * 60 + (60 - second) + buffer_seconds
+    else:
+        sleep_secs = (next_minute - minute - 1) * 60 + (60 - second) + buffer_seconds
+    time.sleep(max(3, sleep_secs))
+
+
 def main_trading_loop():
-    print("🚀 Intraday Paper Trading Engine Running")
+    print("🚀 Single Continuous Intraday Runner Initialized (09:15 AM - 03:20 PM IST)")
     pre_market_executed = False
 
     while True:
@@ -295,24 +308,24 @@ def main_trading_loop():
 
         # Skip weekends
         if now_ist.weekday() >= 5:
-            print("Weekend. Sleeping for 1 hour...")
-            time.sleep(3600)
-            continue
+            print("Weekend. No market session. Exiting runner.")
+            break
 
-        # Task A: Execute Pre-Market Analysis ONCE between 09:00 AM and 09:14 AM IST
+        # Task A: Execute Pre-Market Analysis ONCE between 09:00 AM and 09:15 AM IST
         if dtime(9, 0) <= current_time < dtime(9, 15) and not pre_market_executed:
             run_pre_market_analysis()
             pre_market_executed = True
             time.sleep(10)
             continue
 
-        # Task B: Pre-Market Wait Window (09:15 AM - 09:30 AM)
-        if dtime(9, 15) <= current_time < dtime(9, 30):
-            time.sleep(15)
+        # Task B: Pre-Market Wait Window (09:15 AM - 09:20 AM: Wait for first 5m bar to complete)
+        if dtime(9, 15) <= current_time < dtime(9, 20):
+            print(f"[{now_ist.strftime('%H:%M:%S')}] Waiting for first 5-min candle (09:15-09:20) to settle...")
+            sleep_until_next_5m_boundary(buffer_seconds=3)
             continue
 
-        # Task C: Active Intraday Window (09:30 AM - 03:15 PM IST)
-        if dtime(9, 30) <= current_time < dtime(15, 15):
+        # Task C: Active Intraday Window (09:20 AM - 03:15 PM IST)
+        if dtime(9, 20) <= current_time < dtime(15, 15):
             print(f"[{now_ist.strftime('%H:%M:%S')}] Running Intraday Confluence Scan...")
             try:
                 raw_df = run_intraday_preopen_and_orb_scan(WATCHLIST)
@@ -321,7 +334,6 @@ def main_trading_loop():
                     filtered_rows = []
                     for _, row in raw_df.iterrows():
                         direction = "LONG" if "BUY" in str(row["Signal"]) else "SHORT"
-                        # Extract numeric rvol from '5m Vol' string (e.g. '3.2x' -> 3.2)
                         try:
                             rvol_val = float(str(row["5m Vol"]).replace("x", ""))
                         except Exception:
@@ -336,14 +348,15 @@ def main_trading_loop():
                         if logged > 0:
                             print(f"[+] Logged {logged} new paper trade(s) aligned with market bias.")
             except Exception as e:
-                print(f"[!] Loop Data Download / Scan Error: {e}")
+                print(f"[!] Intraday Scan Error: {e}")
 
-            time.sleep(60)
+            # Sleep precisely until next 5-minute candle closes (e.g. at XX:X0:03 or XX:X5:03)
+            sleep_until_next_5m_boundary(buffer_seconds=3)
             continue
 
-        # Task D: Closing Window (03:15 PM IST Auto Square-Off)
+        # Task D: Closing Window (03:15 PM IST Auto Square-Off & Daily Report)
         if current_time >= dtime(15, 15):
-            print("🔔 03:15 PM Reached. Squaring off open trades...")
+            print("🔔 03:15 PM Reached. Squaring off open trades via Two-Stage Exit Engine...")
             try:
                 report = evaluate_open_paper_trades()
                 send_telegram_alert(report)
@@ -354,9 +367,8 @@ def main_trading_loop():
                     print(f"[!] Chart generation error: {chart_e}")
             except Exception as e:
                 print(f"[!] Error during 3:15 PM evaluation: {e}")
-            pre_market_executed = False  # Reset flag for next trading session
-            print("💤 Session closed. Sleeping until tomorrow morning...")
-            time.sleep(3600)
+            print("🏁 Trading day complete. Exiting runner cleanly.")
+            break
 
 
 if __name__ == "__main__":

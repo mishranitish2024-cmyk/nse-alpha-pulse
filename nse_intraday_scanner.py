@@ -1,8 +1,12 @@
 import sys
 import warnings
+import pytz
+from datetime import datetime, time as dtime, timedelta
 import yfinance as yf
 import pandas as pd
 from tabulate import tabulate
+
+IST = pytz.timezone("Asia/Kolkata")
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -203,23 +207,136 @@ def run_eod_watchlist_scan(tickers: list[str]) -> pd.DataFrame:
     return res_df
 
 
+def get_completed_5m_candles(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Processes 5m data from yfinance and removes any currently forming (incomplete)
+    5-minute candle so indicators and breakouts only evaluate closed bars.
+    """
+    if df.empty:
+        return df
+
+    # Flatten MultiIndex columns if using yfinance >= 0.2.40
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    # Ensure index is timezone-aware in IST
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC").tz_convert(IST)
+    else:
+        df.index = df.index.tz_convert(IST)
+
+    now_ist = datetime.now(IST)
+
+    # Floor current time to the active 5-minute bucket
+    # Example: At 09:21:14 IST, current_bucket_start is 09:20:00 IST
+    # Only strip active forming bar during market hours (09:15-15:30) on trading days
+    if now_ist.date() == df.index[-1].date() and dtime(9, 15) <= now_ist.time() < dtime(15, 30):
+        current_bucket_start = now_ist.replace(
+            minute=(now_ist.minute // 5) * 5, second=0, microsecond=0
+        )
+        # Keep ONLY candles strictly BEFORE the active forming bucket
+        completed_df = df[df.index < current_bucket_start].copy()
+        return completed_df
+
+    return df
+
+
+def get_nifty_regime(intra_data: pd.DataFrame) -> dict:
+    """Evaluates 5m VWAP & 20 EMA trend of Nifty 50 index (^NSEI)."""
+    try:
+        if "^NSEI" in intra_data:
+            nifty_raw = intra_data["^NSEI"].dropna()
+        else:
+            nifty_raw = yf.download("^NSEI", period="5d", interval="5m", progress=False).dropna()
+
+        nifty_df = get_completed_5m_candles(nifty_raw)
+        if len(nifty_df) < 10:
+            return {"regime": "NEUTRAL", "allow_long": True, "allow_short": True}
+
+        latest_date = nifty_df.index[-1].date()
+        today_nifty = nifty_df[nifty_df.index.date == latest_date].copy()
+        if len(today_nifty) < 2:
+            return {"regime": "NEUTRAL", "allow_long": True, "allow_short": True}
+
+        typ = (today_nifty["High"] + today_nifty["Low"] + today_nifty["Close"]) / 3
+        today_nifty["VWAP"] = (typ * today_nifty["Volume"]).cumsum() / today_nifty["Volume"].cumsum()
+        nifty_df["EMA20"] = nifty_df["Close"].ewm(span=20, adjust=False).mean()
+
+        last_c = float(nifty_df["Close"].iloc[-1])
+        last_vwap = float(today_nifty["VWAP"].iloc[-1])
+        last_ema20 = float(nifty_df["EMA20"].iloc[-1])
+
+        if last_c > last_vwap and last_c > last_ema20:
+            return {
+                "regime": "🚀 BULLISH (Nifty > VWAP & 20 EMA)",
+                "allow_long": True,
+                "allow_short": False,
+            }
+        elif last_c < last_vwap and last_c < last_ema20:
+            return {
+                "regime": "🩸 BEARISH (Nifty < VWAP & 20 EMA)",
+                "allow_long": False,
+                "allow_short": True,
+            }
+        else:
+            return {
+                "regime": "⚖️ CHOPPY / SIDEWAYS (Nifty inside range)",
+                "allow_long": True,
+                "allow_short": True,
+            }
+    except Exception as e:
+        print(f"[!] Nifty regime evaluation warning: {e}")
+        return {"regime": "NEUTRAL", "allow_long": True, "allow_short": True}
+
+
 def run_intraday_preopen_and_orb_scan(tickers: list[str], capital: float = 50000.0) -> pd.DataFrame:
     """Stage B: 5-Minute Intraday Candlestick, VWAP, 20/200 EMA, RSI & 15m ORB Engine."""
-    daily_data = yf.download(tickers, period="5d", interval="1d", group_by="ticker", progress=False, threads=True)
-    intra_data = yf.download(tickers, period="5d", interval="5m", group_by="ticker", progress=False, threads=True)
+    now_ist = datetime.now(IST)
+
+    # 1. Block execution if triggered before 09:20 AM IST on market days
+    market_first_close = now_ist.replace(hour=9, minute=20, second=0, microsecond=0)
+    if now_ist.weekday() < 5 and now_ist < market_first_close:
+        print("Skipping: First 5-minute candle (09:15-09:20 AM IST) has not closed yet.")
+        return pd.DataFrame()
+
+    scan_tickers = list(set(tickers + ["^NSEI"]))
+    daily_data = yf.download(scan_tickers, period="5d", interval="1d", group_by="ticker", progress=False, threads=True)
+    intra_data = yf.download(scan_tickers, period="5d", interval="5m", group_by="ticker", progress=False, threads=True)
     results = []
+
+    # Market Direction Gate
+    nifty_info = get_nifty_regime(intra_data)
 
     for ticker in tickers:
         try:
             d_df = daily_data[ticker].dropna()
-            i_df = intra_data[ticker].dropna()
+            raw_i = intra_data[ticker].dropna()
+            i_df = get_completed_5m_candles(raw_i)
             if len(d_df) < 2 or len(i_df) < 30:
                 continue
 
+            last_candle = i_df.iloc[-1]
+            candle_open_time = i_df.index[-1]
+            candle_close_time = candle_open_time + timedelta(minutes=5)
+
+            # 2. Staleness Guard during live market hours:
+            if now_ist.weekday() < 5 and dtime(9, 20) <= now_ist.time() <= dtime(15, 30):
+                if candle_open_time.date() != now_ist.date():
+                    continue
+                if (now_ist - candle_close_time) > timedelta(minutes=15):
+                    continue
+
             latest_date = i_df.index[-1].date()
             today_df = i_df[i_df.index.date == latest_date].copy()
-            if len(today_df) < 2:
+            if len(today_df) < 1:
                 continue
+
+            # 3. Gap Protection Filter: Skip if stock gapped > 2.2% at open
+            if len(d_df) >= 2 and len(today_df) >= 1:
+                prev_close = float(d_df["Close"].iloc[-2])
+                today_open = float(today_df["Open"].iloc[0])
+                if prev_close > 0 and (abs(today_open - prev_close) / prev_close) > 0.022:
+                    continue  # Exhaustion gap risk
 
             i_df["EMA20"] = i_df["Close"].ewm(span=20, adjust=False).mean()
             i_df["EMA200"] = i_df["Close"].ewm(span=200, adjust=False).mean()
@@ -252,6 +369,15 @@ def run_intraday_preopen_and_orb_scan(tickers: list[str], capital: float = 50000
             entry_price = stop_loss = target_price = 0.0
             qty = 0
 
+            # 4. Trading Day Segmentation (Midday Lull & Closing Exit)
+            current_t = now_ist.time()
+            is_entry_window = True
+            if now_ist.weekday() < 5:
+                # 11:15 AM - 01:30 PM: Midday lull (no new entries)
+                # 02:30 PM+: Closing volatility (no new entries)
+                if (dtime(11, 15) <= current_t < dtime(13, 30)) or (current_t >= dtime(14, 30)):
+                    is_entry_window = False
+
             # Bullish Confluence Check
             if curr["Close"] > current_vwap and curr["Close"] > curr["EMA200"]:
                 if candle_pattern and "🟢" in candle_pattern and (near_vwap or near_ema20 or curr["Close"] > orb_high):
@@ -274,6 +400,17 @@ def run_intraday_preopen_and_orb_scan(tickers: list[str], capital: float = 50000
                     entry_price = round(curr["Close"], 2)
                     stop_loss = round(min(orb_high, current_vwap), 2)
 
+            # 5. Enforce Nifty 50 Directional Gate (Require RVOL >= 2.5x for Counter-Trend)
+            if action:
+                if "BUY" in action and not nifty_info.get("allow_long", True) and vol_ratio < 2.5:
+                    action = None
+                elif "SHORT" in action and not nifty_info.get("allow_short", True) and vol_ratio < 2.5:
+                    action = None
+
+            # Block action outside entry window
+            if action and not is_entry_window:
+                action = None
+
             if action and abs(entry_price - stop_loss) > 0:
                 risk_per_share = abs(entry_price - stop_loss)
                 qty = int((capital * 0.01) // risk_per_share)
@@ -282,8 +419,10 @@ def run_intraday_preopen_and_orb_scan(tickers: list[str], capital: float = 50000
                 )
 
             if action or candle_pattern:
+                bar_window = f"{candle_open_time.strftime('%H:%M')}-{candle_close_time.strftime('%H:%M')}"
                 results.append({
                     "Stock": ticker.replace(".NS", ""),
+                    "Bar": bar_window,
                     "LTP (₹)": round(curr["Close"], 2),
                     "VWAP": round(current_vwap, 2),
                     "20 EMA": round(curr["EMA20"], 2),
